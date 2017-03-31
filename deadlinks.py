@@ -1,4 +1,6 @@
 import argparse
+import sys
+from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 import requests
@@ -6,10 +8,13 @@ import requests
 class Crawler(object):
 
     def __init__(self, domain):
-        self.domain = domain
+
+        # for now require complete domain searching
+        self.domain = 'http://'+urlparse(domain).hostname
+
         self.urls_crawled = []
         self.broken_links = {}
-        self.CRAWLING_LIMIT = 50
+        self.CRAWLING_LIMIT = 1000
 
     def sanitize_url(self, url):
         """Return a sanitized/properly formatted url."""
@@ -26,7 +31,7 @@ class Crawler(object):
 
     def links_to_crawl(self, links):
         """Return a list of links to crawl"""
-        
+
         to_crawl = []
 
         for link in links:
@@ -62,38 +67,49 @@ class Crawler(object):
         page = requests.get(url)
         page_text = page.text
         soup = BeautifulSoup(page_text, 'lxml')
-        links = [a['href'] for a in soup.find_all('a', href=True)]
 
+        links = [a['href'] for a in soup.find_all('a', href=True)]
         hrefs = self.links_to_crawl(links)
 
         return hrefs
 
-    def find_broken_links(self, url):
-        """Look for broken links on page"""
+    def validate_crawl(self, url):
+
+        url = self.sanitize_url(url)
 
         if len(self.urls_crawled) >= self.CRAWLING_LIMIT:
-            print('CRAWLING LIMIT REACHED FOR CURRENT BRANCH')
-            return
+            return False
 
-        url = self.sanitize_url(url) 
+        if not url:
+            return False
 
+        if url in self.urls_crawled:
+            return False
+
+        return url
+
+    def find_broken_links(self, url, parent=None):
+        """Look for broken links on page"""
+        sys.stdout.flush()
+        print('.', end='')
+        url = self.validate_crawl(url)
         if not url:
             return
 
-        if url in self.urls_crawled:
-            return
-        
         self.urls_crawled.append(url)
 
         status, content_type = self.get_headers(url)
 
         if status == 200 and content_type.startswith('text/'):
+
             links = self.get_page_links(url)
             for link in links:
-                self.find_broken_links(link)
+
+                self.find_broken_links(link, url)
         else:
-            if status == 404:
-                self.broken_links[url] = (status, content_type)
+            if status == 404 and parent:
+                self.broken_links.setdefault(parent, [])
+                self.broken_links[parent].append(url)
 
 def start_crawl(url):
     """Create crawler instance and perform crawl"""
@@ -102,9 +118,10 @@ def start_crawl(url):
     crawler.find_broken_links(crawler.domain)
 
     if crawler.broken_links:
-        for url, info in crawler.broken_links.items():
-            print('{}\nINFO: {}'.format(url, info))
-            print()
+        for parent_url, deadlinks in crawler.broken_links.items():
+            print(parent_url+': ')
+            for link in deadlinks:
+                print('   ', link)
     else:
         print('No broken links found')
 
